@@ -1,0 +1,71 @@
+---
+title: "Cohort Selection"
+author: "<h3>SOCR MIMIC-III Team</h3>"
+date: "`r format(Sys.time(), '%B %Y')`"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: default
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+---
+
+*Libraries Used*
+```{r message=F, warning=F}
+library('bigrquery')     # Query data from Google BigQuery
+library('knitr')         # Make knited tables ("kables")
+library('kableExtra')    # Extra kable formatting options
+
+project = 'testingtesting123' # CHANGE THIS TO YOUR PROJECT ID
+```
+
+# Introduction
+
+TODO: Brief overview of cohort selection process, including general rational (e.g. pulled from sources)
+
+## Criteria
+
+### In-hospital mortality
+
+TODO: List and describe rational for in-hospital criteria
+
+### Out-of-hospital mortality
+
+TODO: List and describe rational for out-of-hospital criteria
+
+# Methods
+
+## In-hospital mortality cohort selection
+
+TODO: Write code to select cohort according to above criteria
+
+## Out-of-hospital mortality cohort selection
+
+### Criteria 1: Patients with acute heart failure
+
+To select patients with acute heart failure, we first constructed a cohort of all heart failure patients, denoted by the ICD9 code `4280`, then subtracted those that had an additional chronic heart failure diagnosis (codes `42822, 42823, 42832, 42833, 42842 & 42843`).
+
+```{r message=F, warning=F}
+sql <- "SELECT *
+        FROM [physionet-data.mimiciii_clinical.diagnoses_icd]
+        WHERE icd9_code IN ('4280')
+        AND hadm_id NOT IN (
+            SELECT hadm_id
+            FROM [physionet-data.mimiciii_clinical.diagnoses_icd]
+            WHERE icd9_code IN ('42822', '42823', '42832', '42833', '42842', '42843') 
+            GROUP BY hadm_id
+        )"
+
+cohort <- query_exec(sql, project=project)
+```
+
+Based on this initial query, there are `r length(unique(cohort$HADM_ID))` unique encounters in our cohort representing `r length(unique(cohort$SUBJECT_ID))` individual subjects.
+
+TODO: Add further criteria to further filter cohort
+
+
+
