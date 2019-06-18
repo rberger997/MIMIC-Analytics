@@ -12,10 +12,10 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Project name setup
 
 ### Problem: 
-Everyone working on the Mimic Analytics project needs to use their own project name for Google BigQuery. This makes it difficult to write scripts since everyone has to modify every script to include their project name. 
+Everyone working on the Mimic Analytics project needs to use their own project name for Google BigQuery. This makes it difficult to write scripts since everyone has to modify every script to include their unique project name. 
 
 ### Solution: 
-This script will be modified by everyone to include their project name and save it as `project_name.RDS` object in the repository. In every script we'll load the `RDS` object and it will always load your project name. For this to work we'll need to add `project_name.RDS` to the `gitignore` 
+This script will be modified by everyone to include their project name and save it as `my-project-name.RDS` file in the repository. In every script we'll load the `RDS` file and it will always load your project name. For this to work the `my-project-name.RDS` file has been added to the `gitignore`. 
 
 ```{r}
 # MODIFY THIS - Set to your unique Google BigQuery project name
