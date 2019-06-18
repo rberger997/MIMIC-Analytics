@@ -50,3 +50,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# R project files #
+#########################
+.Rproj.user*
+my-project-name.RDS
