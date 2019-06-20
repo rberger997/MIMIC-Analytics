@@ -22,7 +22,6 @@ This script will be modified by everyone to include their project name and save 
 project <- 'mimic-analytics-rberger'
 
 # Save as an RDS file in the repository
-library(here)
-saveRDS(project, file = here('my-project-name.RDS'))
+saveRDS(project, file = 'my-project-name.RDS')
 ```
 

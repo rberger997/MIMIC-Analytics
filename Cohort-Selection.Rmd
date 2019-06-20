@@ -19,9 +19,8 @@ output:
 library('bigrquery')     # Query data from Google BigQuery
 library('knitr')         # Make knited tables ("kables")
 library('kableExtra')    # Extra kable formatting options
-library('here')          # Control project directories
 
-project <- readRDS(file = here('my-project-name.RDS'))
+project <- readRDS(file = 'my-project-name.RDS')
 ```
 
 # Introduction

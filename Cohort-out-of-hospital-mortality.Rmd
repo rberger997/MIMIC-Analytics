@@ -1,0 +1,214 @@
+---
+title: "Cohort Selection"
+author: "<h3>SOCR MIMIC-III Team</h3>"
+date: "`r format(Sys.time(), '%B %Y')`"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    theme: default
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+---
+
+*Libraries Used*
+```{r message=F, warning=F}
+library('bigrquery')     # Query data from Google BigQuery
+library('knitr')         # Make knited tables ("kables")
+library('kableExtra')    # Extra kable formatting options
+
+project <- readRDS(file = 'my-project-name.RDS')
+```
+
+# Introduction
+
+TODO: Brief overview of cohort selection process, including general rational (e.g. pulled from sources)
+
+
+## Criteria 1: Patients with acute heart failure
+
+To select patients with acute heart failure, we first constructed a cohort of all heart failure patients, denoted by the ICD9 code `4280`, then subtracted those that had an additional chronic heart failure diagnosis (codes `42822, 42823, 42832, 42833, 42842 & 42843`).
+
+```{r message=F, warning=F}
+sql <- "SELECT *
+        FROM [physionet-data.mimiciii_clinical.diagnoses_icd]
+        WHERE icd9_code IN ('4280')
+        AND hadm_id NOT IN (
+            SELECT hadm_id
+            FROM [physionet-data.mimiciii_clinical.diagnoses_icd]
+            WHERE icd9_code IN ('42822', '42823', '42832', '42833', '42842', '42843') 
+            GROUP BY hadm_id
+        )"
+
+cohort <- query_exec(sql, project=project)
+```
+
+Based on this initial query, there are `r length(unique(cohort$HADM_ID))` unique encounters in our cohort representing `r length(unique(cohort$SUBJECT_ID))` individual subjects.
+
+
+# Out-of-hospital mortality
+
+## Data Source
+
+We want to see the mortality of these patients at given time points after their discharge from the hospital. To do this we need two things:
+
+* Their date of discharge (in the admissions table)
+* Their date of death (in the patients table)
+
+We'll have to set up a couple queries using the cohort subject_id as a filter and pull these data from the different tables. In the end we'll join these together and have a table of patients in our defined cohort with admission date, discharge date, and death date. 
+
+
+
+```{r}
+# Get data for date of death
+sql <- "SELECT *
+        FROM [physionet-data.mimiciii_clinical.patients]"
+
+patients <- query_exec(sql, project=project)
+
+
+
+
+# Get data for date of admission/discharge
+sql <- "SELECT SUBJECT_ID, HADM_ID, ADMITTIME, DISCHTIME
+        FROM [physionet-data.mimiciii_clinical.admissions]"
+
+admissions <- query_exec(sql, project=project)
+
+
+
+library(dplyr)
+library(magrittr)
+# Left join with patients in the cohort
+cohort1 <- select(patients, -ROW_ID) %>% 
+  left_join(cohort,., by = "SUBJECT_ID") %>% 
+  select(-ROW_ID)
+
+cohort1 <- left_join(cohort1, admissions, by = c('HADM_ID', 'SUBJECT_ID'))
+
+head(cohort1)
+```
+## Removing in hospital mortality
+
+We want to remove all the entries where the patient died in the hospital on that visit. One way is to look to see if their date of death `DOD` was within their time spent in the hospital given by `ADMITTIME` and `DISCHTIME`. If `DOD` is between the dates of admission and discharge the patient died on this hospital visit and will be removed from the dataset.
+
+
+
+```{r}
+# Calculate if patient died on that visit to the hospital
+library(lubridate)
+cohort1 <- cohort1 %>% 
+  mutate(DIED_ON_VISIT = if_else(DOD %within% c(ADMITTIME %--% DISCHTIME), 1, 0, missing = 0))
+  
+
+# Calculate patient age at discharge
+cohort1$AGE <- round((cohort1$DISCHTIME - cohort1$DOB)/365, 1)
+
+# Calculate how long patient was admitted for each visit
+cohort1$DAYS_ADMITTED <- difftime(cohort1$DISCHTIME, cohort1$ADMITTIME, units = 'days') %>% round(., 1)
+
+
+```
+## Determining time from discharge to death
+
+We want to look at mortality at different time points after discharge from the hospital. To do this we'll calculate the number of days from discharge to death for all visits to the hospital and then convert these into binary mortality values (0 for alive, 1 for deceased) at specified time points (72h, 1 week, 1 month, 6 months, 1 year). 
+
+For example a patient that died 3 months after discharge would have mortality values of:
+
+* 72 hours: 0
+* 1 week: 0
+* 1 month: 0
+* 6 months: 1
+* 1 year: 1
+
+
+
+```{r}
+
+# Calculate length of time between discharge and death (converted to days)
+cohort1$MORTALITY_AFTER_DISCH_DAYS <- round((cohort1$DOD - cohort1$DISCHTIME) /(60*60*24), digits = 2)  
+
+
+
+# Calculate mortality at 72h (3 days), 1 week, 1 month, 6 months, 1 year
+cohort1$MORTALITY_3D <- if_else(cohort1$MORTALITY_AFTER_DISCH_DAYS <= 3, 1, 0, missing = 0)
+cohort1$MORTALITY_7D <- if_else(cohort1$MORTALITY_AFTER_DISCH_DAYS <= 7, 1, 0, missing = 0)
+cohort1$MORTALITY_30D <- if_else(cohort1$MORTALITY_AFTER_DISCH_DAYS <= 30, 1, 0, missing = 0) 
+cohort1$MORTALITY_180D <- if_else(cohort1$MORTALITY_AFTER_DISCH_DAYS <= 180, 1, 0, missing = 0)
+cohort1$MORTALITY_365D <- if_else(cohort1$MORTALITY_AFTER_DISCH_DAYS <= 365, 1, 0, missing = 0)
+
+```
+
+The values of `MORTALITY_AFTER_DISCH_DAYS` give days for patients that died and `NA` for patients who are alive. We'll give living patients a large number (10,000) so that when we do some filtering (removing negative values of `MORTALITY_AFTER_DISCH_DAYS` especially) it won't remove living patients.
+
+
+
+```{r}
+
+# Convert living patients to have mortality after discharge time of 10000
+# Need to do this for filtering out the negative mortality after discharge times
+cohort1$MORTALITY_AFTER_DISCH_DAYS <- coalesce(cohort1$MORTALITY_AFTER_DISCH_DAYS, 10000)
+
+```
+## Filtering the cohort
+
+Now that we have the mortality at different time points calculated, we need to filter the cohort based on our criteria:
+
+* Age > 18
+* Patient did not die on the visit
+
+Also with age all patients over 90 years old have been converted in the dataset to age > 300 for confidentiality reasons. We'll filter out patients with age > 100 to account for this.
+
+
+
+```{r}
+# Cohort filtering
+cohort1 <- filter(cohort1, MORTALITY_AFTER_DISCH_DAYS >= 0) %>%  # Remove negative mortality times 
+  filter(AGE < 100 & AGE > 18) %>%   # Filter age 18 to 89
+  filter(!DIED_ON_VISIT == 1)        # Remove in hospital mortality
+
+
+head(cohort1)
+```
+## Summary of cohort
+
+After filtering there are `r length(unique(cohort1$HADM_ID))` hospital visits by `r length(unique(cohort1$SUBJECT_ID))` unique patients. 
+
+
+
+```{r}
+# Make a summary table of mortality
+summarytable <- data.frame('Time_days' = c(3, 7, 30, 180, 365),
+                           'n_Mortality' = c(sum(cohort1$MORTALITY_3D), 
+                                           sum(cohort1$MORTALITY_7D),
+                                           sum(cohort1$MORTALITY_30D),
+                                           sum(cohort1$MORTALITY_180D),
+                                           sum(cohort1$MORTALITY_365D)))
+
+summarytable$Percent_mortality <- 100*round(summarytable$n_Mortality/8059, 3)
+
+kable(summarytable) %>% 
+  kable_styling(bootstrap_options = 'striped')
+
+
+
+# Look at distribution of time to death after discharge in those that died
+test <- cohort1 %>% 
+  filter(EXPIRE_FLAG == 1)
+hist(as.numeric(test$MORTALITY_AFTER_DISCH_DAYS),
+     breaks = 20, 
+     col = 'gray',
+     main = 'Time from discharge to death for patients in cohort who died',
+     xlab = 'Days')
+```
+
+## Comments
+
+Thoughts:
+
+* Very few patients die shortly after discharge (5.2% in the first 30 days)
+* Most patients who die do so within the first year of discharge from the hospital
+* Why is there a discrepancy between DoD SSN and DoD hospital for some entries?
